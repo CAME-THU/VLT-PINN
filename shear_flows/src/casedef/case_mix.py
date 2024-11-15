@@ -3,6 +3,7 @@
 import numpy as np
 # import torch
 import deepxde as dde
+from utils.icbcs import ScaledDirichletBC, ScaledNeumannBC, ScaledPointSetBC
 from scipy.interpolate import interp1d
 
 
@@ -11,9 +12,10 @@ class Case:
         self.args = args
 
         # ----------------------------------------------------------------------
-        # define calculation domain size
+        # define calculation domain
         self.x_l, self.x_r = 0.0, 1.0
         self.y_l, self.y_r = -0.2, 0.2
+        self.geom = dde.geometry.Rectangle(xmin=[self.x_l, self.y_l], xmax=[self.x_r, self.y_r])
 
         # define the names of independents, dependents, and equations
         self.names = {
@@ -24,7 +26,7 @@ class Case:
 
         self.icbcocs = []  # initial, boundary, observation conditions
 
-        self.var_nu_s = dde.Variable(args.nu_ini * args.scale_nu) if args.problem_type == "inverse_nu" else None
+        self.nu_infe_s = dde.Variable(args.infer_paras["nu"] * args.scales["nu"]) if "nu" in args.infer_paras else None
 
         # ----------------------------------------------------------------------
         # define parameters
@@ -37,6 +39,10 @@ class Case:
 
         self.delta = 0.1  # 0.1, 1
         self.Re_x = self.u_far * self.delta / self.nu
+
+        # ----------------------------------------------------------------------
+        # define ICs, BCs, OCs
+        self.define_icbcocs()
 
     # ----------------------------------------------------------------------
     # theoretical solution with individual inputs
@@ -67,52 +73,117 @@ class Case:
         return self.func_psi_ind(xy[:, 0:1], xy[:, 1:2])
 
     # ----------------------------------------------------------------------
-    # theoretical solution with linear-transformed inputs and outputs
-    def func_us_ind(self, xs, ys):
-        x = xs / self.args.scale_x - self.args.shift_x
-        y = ys / self.args.scale_y - self.args.shift_y
-        return self.func_u_ind(x, y) * self.args.scale_u
-
-    def func_vs_ind(self, xs, ys):
-        x = xs / self.args.scale_x - self.args.shift_x
-        y = ys / self.args.scale_y - self.args.shift_y
-        return self.func_v_ind(x, y) * self.args.scale_v
-
-    def func_us(self, xy_s):
-        return self.func_us_ind(xy_s[:, 0:1], xy_s[:, 1:2])
-
-    def func_vs(self, xy_s):
-        return self.func_vs_ind(xy_s[:, 0:1], xy_s[:, 1:2])
-
-    # ----------------------------------------------------------------------
     # define pde
-    def pde_uv(self, xy_s, uv_s):
+    def pde_uv(self, xy, uv):
         args = self.args
-        # xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
-        us, vs = uv_s[:, 0:1], uv_s[:, 1:2]
-        scale_u, scale_v = args.scale_u, args.scale_v
-        scale_x, scale_y = args.scale_x, args.scale_y
-        shift_x, shift_y = args.shift_x, args.shift_y
+        # x, y = xy[:, 0:1], xy[:, 1:2]
+        u, v = uv[:, 0:1], uv[:, 1:2]
+        scale_u, scale_v = args.scales["u"], args.scales["v"]
+        scale_x, scale_y = args.scales["x"], args.scales["y"]
+        shift_x, shift_y = args.shifts["x"], args.shifts["y"]
 
-        us_xs = dde.grad.jacobian(uv_s, xy_s, i=0, j=0)
-        us_ys = dde.grad.jacobian(uv_s, xy_s, i=0, j=1)
-        # us_xsxs = dde.grad.hessian(uv_s, xy_s, component=0, i=0, j=0)
-        us_ysys = dde.grad.hessian(uv_s, xy_s, component=0, i=1, j=1)
+        u_x = dde.grad.jacobian(uv, xy, i=0, j=0)
+        u_y = dde.grad.jacobian(uv, xy, i=0, j=1)
+        # u_xx = dde.grad.hessian(uv, xy, component=0, i=0, j=0)
+        u_yy = dde.grad.hessian(uv, xy, component=0, i=1, j=1)
 
-        # vs_xs = dde.grad.jacobian(uv_s, xy_s, i=1, j=0)
-        vs_ys = dde.grad.jacobian(uv_s, xy_s, i=1, j=1)
-        # vs_xsxs = dde.grad.hessian(uv_s, xy_s, component=1, i=0, j=0)
-        # vs_ysys = dde.grad.hessian(uv_s, xy_s, component=1, i=1, j=1)
+        # v_x = dde.grad.jacobian(uv, xy, i=1, j=0)
+        v_y = dde.grad.jacobian(uv, xy, i=1, j=1)
+        # v_xx = dde.grad.hessian(uv, xy, component=1, i=0, j=0)
+        # v_yy = dde.grad.hessian(uv, xy, component=1, i=1, j=1)
 
-        cy = (scale_u / scale_v) * (scale_y / scale_x)
-        cyy = scale_u * scale_y ** 2 / scale_x
-        k = max(1.0, 1.0 / cy)
-        nu = self.var_nu_s / args.scale_nu if args.problem_type == "inverse_nu" else self.nu
+        nu = self.nu_infe_s / args.scales["nu"] if "nu" in args.infer_paras else self.nu
 
-        continuity = us_xs + cy * vs_ys
-        momentum_x = us * us_xs + cy * vs * us_ys - cyy * nu * us_ysys
-        continuity *= k
-        momentum_x *= k
+        continuity = u_x + v_y
+        momentum_x = u * u_x + v * u_y - nu * u_yy
+
+        # cy = (scale_u / scale_v) * (scale_y / scale_x)
+        # k = max(1.0, 1.0 / cy)
+        # coef = k * (scale_u / scale_x)
+        coef = max(scale_u / scale_x, scale_v / scale_y)
+        continuity *= coef
+        momentum_x *= coef * scale_u
 
         return [continuity, momentum_x]
+
+    # ----------------------------------------------------------------------
+    # define ICs, BCs, OCs
+    def define_icbcocs(self):
+        args = self.args
+        geom = self.geom
+        x_l, x_r = self.x_l, self.x_r
+        y_l, y_r = self.y_l, self.y_r
+        scale_u, scale_v = args.scales["u"], args.scales["v"]
+        scale_x, scale_y = args.scales["x"], args.scales["y"]
+        shift_x, shift_y = args.shifts["x"], args.shifts["y"]
+
+        # def bdr_down(xy, on_bdr):
+        #     y = xy[1]
+        #     return on_bdr and np.isclose(y, y_l)
+
+        def bdr_left_right(xy, on_bdr):
+            x = xy[0]
+            return on_bdr and (np.isclose(x, x_l) or np.isclose(x, x_r))
+
+        def bdr_down_up(xy, on_bdr):
+            y = xy[1]
+            return on_bdr and (np.isclose(y, y_l) or np.isclose(y, y_r))
+
+        # def bdr_left_right_up(xy, on_bdr):
+        #     x, y = xy[0], xy[1]
+        #     return on_bdr and (np.isclose(x, x_l) or np.isclose(x, x_r) or np.isclose(y, y_r))
+        #
+        # def func_dusdys(xy, uv, _):
+        #     return dde.grad.jacobian(uv, xy, i=0, j=1) * scale_u / scale_y
+
+        # # bc_sym_dudy = ScaledNeumannBC(geom, lambda xy: 0, bdr_down, component=0, scale=scale_u / scale_y)  # unknown bug
+        # bc_sym_dudy = dde.icbc.OperatorBC(geom, func_dusdys, bdr_down)
+        # bc_sym_v = ScaledDirichletBC(geom, lambda xy: 0, bdr_down, component=1, scale=scale_v)
+
+        bc_all_u = ScaledDirichletBC(geom, self.func_u, lambda _, on_bdr: on_bdr, component=0, scale=scale_u)
+        bc_all_v = ScaledDirichletBC(geom, self.func_v, lambda _, on_bdr: on_bdr, component=1, scale=scale_v)
+        bc_left_right_u = ScaledDirichletBC(geom, self.func_u, bdr_left_right, component=0, scale=scale_u)
+        bc_left_right_v = ScaledDirichletBC(geom, self.func_v, bdr_left_right, component=1, scale=scale_v)
+        bc_down_up_u = ScaledDirichletBC(geom, self.func_u, bdr_down_up, component=0, scale=scale_u)
+        bc_down_up_v = ScaledDirichletBC(geom, self.func_v, bdr_down_up, component=1, scale=scale_v)
+        # bc_left_right_up_u = ScaledDirichletBC(geom, self.func_u, bdr_left_right_up, component=0, scale=scale_u)
+        # bc_left_right_up_v = ScaledDirichletBC(geom, self.func_v, bdr_left_right_up, component=1, scale=scale_v)
+
+        if args.bc_type == "soft":
+            self.icbcocs += [bc_all_u, bc_all_v]
+            self.names["ICBCOCs"] += ["BC_all_u", "BC_all_v"]
+        elif args.bc_type == "hard_LR":
+            self.icbcocs += [bc_down_up_u, bc_down_up_v]
+            self.names["ICBCOCs"] += ["BC_down_up_u", "BC_down_up_v"]
+        elif args.bc_type == "hard_DU":
+            self.icbcocs += [bc_left_right_u, bc_left_right_v]
+            self.names["ICBCOCs"] += ["BC_left_right_u", "BC_left_right_v"]
+        else:  # "none"
+            pass
+
+        if args.oc_type == "soft":
+            spc_ob = 0.02  # m
+            # spc_ob = (y_r - y_l) / 20  # m
+            n_ob_x, n_ob_y = int((self.x_r - self.x_l) / spc_ob) + 1, int((self.y_r - self.y_l) / spc_ob) + 1
+            ob_xx, ob_yy = np.meshgrid(np.linspace(x_l, x_r, n_ob_x),
+                                       np.linspace(y_l, y_r, n_ob_y), indexing="ij")
+            ob_xy = np.vstack((np.ravel(ob_xx), np.ravel(ob_yy))).T
+            n_ob = n_ob_x * n_ob_y
+
+            ob_u = self.func_u(ob_xy)
+            ob_v = self.func_v(ob_xy)
+            normal_noise_u = np.random.randn(len(ob_u))[:, None]
+            normal_noise_v = np.random.randn(len(ob_v))[:, None]
+            ob_u += normal_noise_u * ob_u * args.noise_level
+            ob_v += normal_noise_v * ob_v * args.noise_level
+
+            oc_u = ScaledPointSetBC(ob_xy, ob_u, component=0, scale=scale_u)
+            oc_v = ScaledPointSetBC(ob_xy, ob_v, component=1, scale=scale_v)
+            self.icbcocs += [oc_u, oc_v]
+            self.names["ICBCOCs"] += ["OC_u", "OC_v"]
+        else:  # "none"
+            ob_xy = np.empty([1, 2])
+            n_ob = 0
+        self.ob_xy = ob_xy
+        self.n_ob = n_ob
 

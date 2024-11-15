@@ -12,6 +12,7 @@ import argparse
 from configs.maps_uv import Maps
 from configs.post_shear import PostProcessShear
 from utils.utils import efmt, cal_stat
+from utils.dataset_modi import ScaledDataSet
 
 
 def main(args):
@@ -36,50 +37,48 @@ def main(args):
         Case = None
     case = Case(args)
 
-    # ----------------------------------------------------------------------
-    # define constants
-    scale_u, scale_v = args.scale_u, args.scale_v
-    scale_x, scale_y = args.scale_x, args.scale_y
-    shift_x, shift_y = args.shift_x, args.shift_y
+    scale_u, scale_v = args.scales["u"], args.scales["v"]
+    scale_x, scale_y = args.scales["x"], args.scales["y"]
+    shift_x, shift_y = args.shifts["x"], args.shifts["y"]
 
     x_l, x_r, y_l, y_r = case.x_l, case.x_r, case.y_l, case.y_r
-    xs_l, xs_r = scale_x * (x_l + shift_x), scale_x * (x_r + shift_x)
-    ys_l, ys_r = scale_y * (y_l + shift_y), scale_y * (y_r + shift_y)
 
     # ----------------------------------------------------------------------
     # define observation points
     spc_ob = 0.02  # m
     # spc_ob = (y_r - y_l) / 20  # m
     n_ob_x, n_ob_y = int((x_r - x_l) / spc_ob) + 1, int((y_r - y_l) / spc_ob) + 1
-    ob_xsxs, ob_ysys = np.meshgrid(np.linspace(xs_l, xs_r, n_ob_x),
-                                   np.linspace(ys_l, ys_r, n_ob_y), indexing="ij")
-    ob_xy_s = np.vstack((np.ravel(ob_xsxs), np.ravel(ob_ysys))).T
+    ob_xx, ob_yy = np.meshgrid(np.linspace(x_l, x_r, n_ob_x),
+                                   np.linspace(y_l, y_r, n_ob_y), indexing="ij")
+    ob_xy = np.vstack((np.ravel(ob_xx), np.ravel(ob_yy))).T
     n_ob = n_ob_x * n_ob_y
 
-    ob_us = case.func_us(ob_xy_s)
-    ob_vs = case.func_vs(ob_xy_s)
-    normal_noise_u = np.random.randn(len(ob_us))[:, None]
-    normal_noise_v = np.random.randn(len(ob_vs))[:, None]
-    ob_us += normal_noise_u * ob_us * args.noise_level
-    ob_vs += normal_noise_v * ob_vs * args.noise_level
+    ob_u = case.func_u(ob_xy)
+    ob_v = case.func_v(ob_xy)
+    normal_noise_u = np.random.randn(len(ob_u))[:, None]
+    normal_noise_v = np.random.randn(len(ob_v))[:, None]
+    ob_u += normal_noise_u * ob_u * args.noise_level
+    ob_v += normal_noise_v * ob_v * args.noise_level
 
-    ts_xsxs, ts_ysys = np.meshgrid(np.linspace(xs_l, xs_r, n_ob_x * 4),
-                                   np.linspace(ys_l, ys_r, n_ob_y * 4), indexing="ij")
-    ts_xy_s = np.vstack((np.ravel(ts_xsxs), np.ravel(ts_ysys))).T
-    ts_us = case.func_us(ts_xy_s)
-    ts_vs = case.func_vs(ts_xy_s)
+    test_xx, test_yy = np.meshgrid(np.linspace(x_l, x_r, n_ob_x * 4),
+                                   np.linspace(y_l, y_r, n_ob_y * 4), indexing="ij")
+    test_xy = np.vstack((np.ravel(test_xx), np.ravel(test_yy))).T
+    test_u = case.func_u(test_xy)
+    test_v = case.func_v(test_xy)
 
-    data = dde.data.DataSet(
-        X_train=ob_xy_s,
-        y_train=np.hstack([ob_us, ob_vs]),
-        X_test=ts_xy_s,
-        y_test=np.hstack([ts_us, ts_vs]),
+    # data = dde.data.DataSet(
+    data = ScaledDataSet(
+        X_train=ob_xy,
+        y_train=np.hstack([ob_u, ob_v]),
+        X_test=test_xy,
+        y_test=np.hstack([test_u, test_v]),
+        scales=(scale_u, scale_v),
         # standardize=True,
     )
 
     # ----------------------------------------------------------------------
     # define maps (network and input/output transforms)
-    maps = Maps(args=args, case=case, bc_type="none")
+    maps = Maps(args=args, case=case)
     net = maps.net
     model = dde.Model(data, net)
 
@@ -123,8 +122,12 @@ def main(args):
                 model_save_path=output_dir + "models/model_last",)
 
     # ----------------------------------------------------------------------
-    # restore a new model
-    # model.restore(output_dir + "models/model_last-20000.pt")
+    # restore the best model (do not if using LBFGS)
+    model_list = os.listdir(output_dir + "models/")
+    model_list_better = [s for s in model_list if "better" in s]
+    saved_epochs = [int(s.split("-")[1][:-3]) for s in model_list_better]
+    best_epoch = max(saved_epochs)
+    model.restore(output_dir + f"models/model_better-{best_epoch}.pt")
 
     # ----------------------------------------------------------------------
     # post-process
@@ -132,9 +135,9 @@ def main(args):
     pp2d.save_data()
     pp2d.save_metrics()
     # pp2d.plot_save_loss_history()
-    # if problem_type == "inverse_nu":
-    #     pp2d.save_var_metrics((case.nu, ), (case.var_nu_s / args.scale_nu, ), ("nu", ))
-    #     pp2d.plot_save_var_history((case.nu, ), (args.scale_nu, ), (r"$\nu$", ), ("nu", ), ("m$^2$/s", ))
+    # if len(args.infer_paras) > 0:
+    #     pp2d.save_para_metrics()
+    #     pp2d.plot_para_history(var_saver)
     pp2d.delete_old_models()
     figsize1 = (10, 4) if args.case_name == "mixing_layer" else (12, 3)
     figsize2 = (10, 8.2) if args.case_name == "mixing_layer" else (10, 5)
@@ -151,21 +154,25 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hyper-parameters")
     parser.add_argument("--case_name", type=str, default="jet_lam_plane")
+
     # parser.add_argument("--problem_type", type=str, default="forward", help="options: forward, inverse, inverse_nu")
     parser.add_argument("--problem_type", type=str, default="fit")
+    parser.add_argument("--bc_type", type=str, default="none", help="options: none, soft, hard_LR, hard_DU")
+    parser.add_argument("--oc_type", type=str, default="soft", help="options: none, soft")
 
-    parser.add_argument("--scale_u", type=float, default=1.0)
-    parser.add_argument("--scale_v", type=float, default=1.0)
-    parser.add_argument("--scale_x", type=float, default=1.0)
-    parser.add_argument("--scale_y", type=float, default=1.0)
-    parser.add_argument("--shift_x", type=float, default=0.0)
-    parser.add_argument("--shift_y", type=float, default=0.0)
+    parser.add_argument("--scales", type=dict,
+                        default={"x": 1.0, "y": 1.0, "u": 1.0, "v": 1.0},
+                        help="(variables * scale) for NN I/O, PDE scaling, and parameter inference")
+    parser.add_argument("--shifts", type=dict, default={"x": 0.0, "y": 0.0},
+                        help="((independent variables + shift) * scale) for NN input and PDE scaling")
 
-    parser.add_argument("--noise_level", type=float, default=0.02,
-                        help="noise level for observations, such as 0.02 (2%)")
+    # parser.add_argument("--infer_paras", type=dict, default={},
+    #                     help="initial values for unknown physical parameters to be inferred")
+    parser.add_argument("--noise_level", type=float, default=0.00,
+                        help="noise level of observed data for inverse problems, such as 0.02 (2%)")
 
-    parser.add_argument("--n_iter", type=int, default=20000)
-    parser.add_argument("--i_run", type=int, default=1)
+    parser.add_argument("--n_iter", type=int, default=20000, help="number of training iterations")
+    parser.add_argument("--i_run", type=int, default=1, help="index of the current run")
 
     # ----------------------------------------------------------------------
     # set arguments
@@ -181,7 +188,7 @@ if __name__ == "__main__":
         7: "mixing_layer",
         8: "boundary_layer",
     }
-    para_dict = {
+    trans_para_dict = {
         "jet_lam_plane": (100, 1000, 100, 100),
         "jet_lam_round": (100, 1000, 100, 100),
         "jet_tur_plane": (1, 10, 10, 100),
@@ -197,12 +204,11 @@ if __name__ == "__main__":
     # ----------------------------------------------------------------------
     # run
     for case_id in (1, ):
-    # for case_id in (5, 6, 7, 8, ):
     # for case_id in (1, 2, 5, 6, 7, 8, ):
         args.case_name = case_dict[case_id]
-        args.scale_u, args.scale_v, args.scale_x, args.scale_y = para_dict[args.case_name]
+        args.scales["u"], args.scales["v"], args.scales["x"], args.scales["y"] = trans_para_dict[args.case_name]
 
-        n_run = 3
+        n_run = 1
 
         for args.i_run in range(1, 1 + n_run):
             output_dir = main(args)

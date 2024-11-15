@@ -10,18 +10,13 @@ class PostProcessKov(PostProcess2D):
         dx, dy = self.x[1] - self.x[0], self.y[1] - self.y[0]
         xy = np.vstack((np.ravel(self.xx), np.ravel(self.yy))).T
 
-        xs = (self.x + args.shift_x) * args.scale_x
-        ys = (self.y + args.shift_y) * args.scale_y
-        xsxs, ysys = np.meshgrid(xs, ys, indexing="ij")
-        xy_s = np.vstack((np.ravel(xsxs), np.ravel(ysys))).T
-
         # ----------------------------------------------------------------------
         # Get the predicted and reference fields
-        output = model.predict(xy_s)
-        # self.output_terms = model.predict(xy_s, operator=case.terms_uv)
-        u_pred = output[:, 0] / args.scale_u
-        v_pred = output[:, 1] / args.scale_v
-        p_pred = output[:, 2] / args.scale_p
+        output = model.predict(xy)
+        # self.output_terms = model.predict(xy, operator=case.terms_uv)
+        u_pred = output[:, 0]
+        v_pred = output[:, 1]
+        p_pred = output[:, 2]
         u_refe = case.func_u(xy).ravel()
         v_refe = case.func_v(xy).ravel()
         p_refe = case.func_p(xy).ravel()
@@ -38,9 +33,15 @@ class PostProcessKov(PostProcess2D):
         self.UU_refe = np.sqrt(self.uu_refe ** 2 + self.vv_refe ** 2)
         self.psipsi_refe = self.stream_function(self.uu_refe, self.vv_refe, dx, dy)
 
-        self.preds = [self.uu_pred, self.vv_pred, self.pp_pred, self.UU_pred, self.psipsi_pred]
-        self.refes = [self.uu_refe, self.vv_refe, self.pp_refe, self.UU_refe, self.psipsi_refe]
-        self.mathnames = ["$u$", "$v$", "$p$", r"$|\mathbf{U}|$", r"$\psi$"]
-        self.textnames = ["u", "v", "p", "U", "psi"]
-        self.units = ["m/s", "m/s", "Pa", "m/s", "m$^2$/s"]
+        self.preds += [self.uu_pred, self.vv_pred, self.pp_pred, self.UU_pred, self.psipsi_pred]
+        self.refes += [self.uu_refe, self.vv_refe, self.pp_refe, self.UU_refe, self.psipsi_refe]
+        self.mathnames += ["$u$", "$v$", "$p$", r"$|\mathbf{U}|$", r"$\psi$"]
+        self.textnames += ["u", "v", "p", "Um", "psi"]
+        self.units += ["m/s", "m/s", "Pa", "m/s", "m$^2$/s"]
 
+        if "nu" in args.infer_paras:
+            self.para_infes += [case.nu_infe_s / args.scales["nu"], ]
+            self.para_refes += [case.nu, ]
+            self.para_mathnames += [r"$\nu$", ]
+            self.para_textnames += ["nu", ]
+            self.para_units += ["m$^2$/s", ]

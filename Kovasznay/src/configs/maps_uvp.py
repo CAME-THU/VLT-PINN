@@ -1,6 +1,6 @@
 """Network architecture, input transform, and output transform."""
 import torch
-from utils.fnn_modi import FNN
+from utils.networks import FNN
 
 
 class Maps:
@@ -16,25 +16,29 @@ class Maps:
             input_transform=self.input_transform,
         )
 
+        self.net.apply_output_transform(self.output_denorm_transform)
         # self.net.apply_output_transform(self.output_solution_transform)
-        # self.net.apply_output_transform(self.output_physical_transform)
 
-    def input_transform(self, xy_s):
-        xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
+    def input_transform(self, xy):
+        x, y = xy[:, 0:1], xy[:, 1:2]
+        xs = (x + self.args.shifts["x"]) * self.args.scales["x"]
+        ys = (y + self.args.shifts["y"]) * self.args.scales["y"]
 
         inputs = torch.cat([
             xs, ys,
             ], dim=1)
         return inputs
 
-    def output_solution_transform(self, xy_s, uvp_s):
-        us_ = self.case.func_us_tensor(xy_s)
-        vs_ = self.case.func_vs_tensor(xy_s)
-        ps_ = self.case.func_ps_tensor(xy_s)
-        return torch.cat([us_, vs_, ps_], dim=1)
-
-    def output_physical_transform(self, xy_s, uvp_s):
-        # xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
+    def output_denorm_transform(self, xy, uvp_s):
         us, vs, ps = uvp_s[:, 0:1], uvp_s[:, 1:2], uvp_s[:, 2:3]
-        return torch.cat([us, vs, ps], dim=1)
+        u = us / self.args.scales["u"]
+        v = vs / self.args.scales["v"]
+        p = ps / self.args.scales["p"]
+        return torch.cat([u, v, p], dim=1)
+
+    def output_solution_transform(self, xy, uvp_s):
+        u_sol = self.case.func_u_tensor(xy)
+        v_sol = self.case.func_v_tensor(xy)
+        p_sol = self.case.func_p_tensor(xy)
+        return torch.cat([u_sol, v_sol, p_sol], dim=1)
 

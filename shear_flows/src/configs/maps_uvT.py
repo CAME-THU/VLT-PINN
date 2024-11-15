@@ -1,11 +1,11 @@
 """Network architecture, input transform, and output transform."""
 # import deepxde as dde
 import torch
-from utils.fnn_modi import FNN
+from utils.networks import FNN
 
 
 class Maps:
-    def __init__(self, args, case, bc_type):
+    def __init__(self, args, case):
         self.args = args
         self.case = case
 
@@ -17,78 +17,69 @@ class Maps:
             input_transform=self.input_transform,
         )
 
-        if bc_type == "soft":
-            # self.net.apply_output_transform(self.output_physical_transform)
-            # self.net.apply_output_transform(self.output_solution_transform)
-            pass
-        elif bc_type == "hard_LR":
+        if args.bc_type == "hard_LR":
             self.net.apply_output_transform(self.output_hardLR_transform)
-        elif bc_type == "hard_DU":
+        elif args.bc_type == "hard_DU":
             self.net.apply_output_transform(self.output_hardDU_transform)
+        else:  # "soft", "none"
+            self.net.apply_output_transform(self.output_denorm_transform)
+            # self.net.apply_output_transform(self.output_solution_transform)
 
-    def input_transform(self, xy_s):
-        xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
-        xs_ = xs + self.case.delta * self.args.scale_x
+    def input_transform(self, xy):
+        x, y = xy[:, 0:1], xy[:, 1:2]
+        # x_ = x + self.case.delta
+        xs = (x + self.args.shifts["x"]) * self.args.scales["x"]
+        ys = (y + self.args.shifts["y"]) * self.args.scales["y"]
 
         inputs = torch.cat([
             xs, ys,
-            # 0.1 * xs, 0.2 * xs, 0.5 * xs, 2.0 * xs, 5.0 * xs, 10.0 * xs,
-            # 0.1 * ys, 0.2 * ys, 0.5 * ys, 2.0 * ys, 5.0 * ys, 10.0 * ys,
-            # xs_ ** (-1/3),
-            # xs_ ** (-1/2),
-            # xs_ ** (-2/3),
-            # xs_ ** (-1),
-            # ys * xs_ ** (-1/3),
-            # ys * xs_ ** (-1/2),
-            # ys * xs_ ** (-2/3),
-            # ys * xs_ ** (-1),
-            # eta, tanh_eta, tanh_eta ** 2,
             ], dim=1)
         return inputs
 
-    def output_solution_transform(self, xy_s, uvT_s):
-        us_ = self.case.func_us(xy_s)
-        vs_ = self.case.func_vs(xy_s,)
-        Ts_ = self.case.func_Ts(xy_s)
-        return torch.cat([us_, vs_, Ts_], dim=1)
-
-    def output_physical_transform(self, xy_s, uvT_s):
-        # xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
+    def output_denorm_transform(self, xy, uvT_s):
         us, vs, Ts = uvT_s[:, 0:1], uvT_s[:, 1:2], uvT_s[:, 2:3]
-        return torch.cat([us, vs, Ts], dim=1)
+        u = us / self.args.scales["u"]
+        v = vs / self.args.scales["v"]
+        T = Ts / self.args.scales["T"]
+        return torch.cat([u, v, T], dim=1)
 
-    def func_us(self, xs, ys):
-        return self.case.func_us_ind(xs, ys)
+    def output_solution_transform(self, xy, uvT_s):
+        u_sol = self.case.func_u(xy)
+        v_sol = self.case.func_v(xy)
+        T_sol = self.case.func_v(xy)
+        return torch.cat([u_sol, v_sol, T_sol], dim=1)
 
-    def func_vs(self, xs, ys):
-        return self.case.func_vs_ind(xs, ys)
+    def func_u(self, x, y):
+        return self.case.func_u_ind(x, y)
 
-    def output_hardLR_transform(self, xy_s, uvT_s):
-        xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
+    def func_v(self, x, y):
+        return self.case.func_v_ind(x, y)
+
+    def output_hardLR_transform(self, xy, uvT_s):
+        x, y = xy[:, 0:1], xy[:, 1:2]
         us, vs, Ts = uvT_s[:, 0:1], uvT_s[:, 1:2], uvT_s[:, 2:3]
+        u = us / self.args.scales["u"]
+        v = vs / self.args.scales["v"]
+        T = Ts / self.args.scales["T"]
+        x_l, x_r = self.case.x_l, self.case.x_r
 
-        scale_x, scale_y = self.args.scale_x, self.args.scale_y
-        shift_x, shift_y = self.args.shift_x, self.args.shift_y
-        xs_l, xs_r = scale_x * (self.case.x_l + shift_x), scale_x * (self.case.x_r + shift_x)
-        # ys_l, ys_r = scale_y * (self.case.y_l + shift_y), scale_y * (self.case.y_r + shift_y)
+        d_l, d_r = (x - x_l) / (x_r - x_l), (x_r - x) / (x_r - x_l)
+        u_ = d_r * self.func_u(x_l, y) + d_l * self.func_u(x_r, y) + d_l * d_r * u
+        v_ = d_r * self.func_v(x_l, y) + d_l * self.func_v(x_r, y) + d_l * d_r * v
+        # T_ = d_r * self.func_T(x_l, y) + d_l * self.func_T(x_r, y) + d_l * d_r * T
+        return torch.cat([u_, v_, T], dim=1)
 
-        d_l, d_r = (xs - xs_l) / (xs_r - xs_l), (xs_r - xs) / (xs_r - xs_l)
-        us_ = d_r * self.func_us(xs_l, ys) + d_l * self.func_us(xs_r, ys) + d_l * d_r * us
-        vs_ = d_r * self.func_vs(xs_l, ys) + d_l * self.func_vs(xs_r, ys) + d_l * d_r * vs
-        return torch.cat([us_, vs_, Ts], dim=1)
-
-    def output_hardDU_transform(self, xy_s, uvT_s):
-        xs, ys = xy_s[:, 0:1], xy_s[:, 1:2]
+    def output_hardDU_transform(self, xy, uvT_s):
+        x, y = xy[:, 0:1], xy[:, 1:2]
         us, vs, Ts = uvT_s[:, 0:1], uvT_s[:, 1:2], uvT_s[:, 2:3]
+        u = us / self.args.scales["u"]
+        v = vs / self.args.scales["v"]
+        T = Ts / self.args.scales["T"]
+        y_l, y_r = self.case.y_l, self.case.y_r
 
-        scale_x, scale_y = self.args.scale_x, self.args.scale_y
-        shift_x, shift_y = self.args.shift_x, self.args.shift_y
-        # xs_l, xs_r = scale_x * (self.case.x_l + shift_x), scale_x * (self.case.x_r + shift_x)
-        ys_l, ys_r = scale_y * (self.case.y_l + shift_y), scale_y * (self.case.y_r + shift_y)
-
-        d_d, d_u = (ys - ys_l) / (ys_r - ys_l), (ys_r - ys) / (ys_r - ys_l)
-        us_ = d_u * self.func_us(xs, ys_l) + d_d * self.func_us(xs, ys_r) + d_d * d_u * us
-        vs_ = d_u * self.func_vs(xs, ys_l) + d_d * self.func_vs(xs, ys_r) + d_d * d_u * vs
-        return torch.cat([us_, vs_, Ts], dim=1)
-
+        d_d, d_u = (y - y_l) / (y_r - y_l), (y_r - y) / (y_r - y_l)
+        u_ = d_u * self.func_u(x, y_l) + d_d * self.func_u(x, y_r) + d_d * d_u * u
+        v_ = d_u * self.func_v(x, y_l) + d_d * self.func_v(x, y_r) + d_d * d_u * v
+        # T_ = d_u * self.func_T(x, y_l) + d_d * self.func_T(x, y_r) + d_d * d_u * T
+        return torch.cat([u_, v_, T], dim=1)
 
