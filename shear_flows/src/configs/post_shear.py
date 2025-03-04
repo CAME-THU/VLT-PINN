@@ -3,7 +3,7 @@ import numpy as np
 from utils.postprocess import PostProcess2D
 
 
-class PostProcessShear(PostProcess2D):
+class Postprocess(PostProcess2D):
     def __init__(self, args, case, model, output_dir):
         super().__init__(args, case, model, output_dir)
 

@@ -3,6 +3,7 @@ import deepxde as dde
 import numpy as np
 # import torch
 import os
+import time
 import argparse
 
 # # relative import is not suggested
@@ -10,7 +11,7 @@ import argparse
 # import sys
 # sys.path.insert(0, os.path.dirname("E:/Research_ASUS/1 PhD project/AI_PDE/projects_PINN/"))
 from configs.maps_uv import Maps
-from configs.post_shear import PostProcessShear
+from configs.post_shear import Postprocess
 from utils.utils import efmt, cal_stat
 from utils.dataset_modi import ScaledDataSet
 
@@ -114,12 +115,16 @@ def main(args):
                   decay=("step", 1000, 0.8),
                   loss_weights=loss_weights,
                   )
+
+    t0 = time.perf_counter()
     model.train(iterations=args.n_iter,
                 display_every=100,
                 disregard_previous_best=False,
                 callbacks=callbacks,
                 model_restore_path=None,
                 model_save_path=output_dir + "models/model_last",)
+    t_took = time.perf_counter() - t0
+    np.savetxt(output_dir + f"training_time_is_{t_took:.2f}s.txt", np.array([t_took]), fmt="%.2f")
 
     # ----------------------------------------------------------------------
     # restore the best model (do not if using LBFGS)
@@ -131,7 +136,7 @@ def main(args):
 
     # ----------------------------------------------------------------------
     # post-process
-    pp2d = PostProcessShear(args=args, case=case, model=model, output_dir=output_dir)
+    pp2d = Postprocess(args=args, case=case, model=model, output_dir=output_dir)
     pp2d.save_data()
     pp2d.save_metrics()
     # pp2d.plot_save_loss_history()
