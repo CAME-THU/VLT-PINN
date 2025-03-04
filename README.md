@@ -6,25 +6,27 @@ The code for the paper: [*Variable linear transformation improved physics-inform
 
 Free jet:
 
-<img alt="framework" height="200" src="./pics/case_jet.png"/>
+<img alt="jet" height="200" src="./pics/case_jet.png"/>
 
 Mixing layer:
 
-<img alt="framework" height="200" src="./pics/case_mixing_layer.png"/>
+<img alt="mixing_layer" height="200" src="./pics/case_mixing_layer.png"/>
 
 Flat-plate boundary layer (left) and wake flow (right):
 
-<img alt="framework" height="200" src="./pics/case_boundary_layer_wake.png"/>
+<img alt="boundary_layer_wake" height="200" src="./pics/case_boundary_layer_wake.png"/>
+
 
 ## Illustration of VLT
 
 Case 1:
 
-<img alt="framework" width="600" src="./pics/VLT_case1.png"/>
+<img alt="VLT_case1" width="600" src="./pics/VLT_case1.png"/>
 
 Case 10:
 
-<img alt="framework" width="600" src="./pics/VLT_case10.png"/>
+<img alt="VLT_case10" width="600" src="./pics/VLT_case10.png"/>
+
 
 ## Corrigendum
 
